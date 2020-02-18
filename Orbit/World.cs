@@ -66,10 +66,10 @@ namespace Orbit
             ColorSheme = Color.Red,
             Body = new Body()
             {
-                //Location = new Vector(0, EARTHRADIUS),
-                //Velocity = new Vector(0, 0),
-                Location = new Vector(0, EARTHRADIUS + 100e3),
-                Velocity = new Vector(-Math.Sqrt(GRAVITYCONST * (EARTHMASS / (EARTHRADIUS + 100e3))), 0),
+                Location = new Vector(0, EARTHRADIUS),
+                Velocity = new Vector(0, 0),
+                //Location = new Vector(0, EARTHRADIUS + 100e3),
+                //Velocity = new Vector(-Math.Sqrt(GRAVITYCONST * (EARTHMASS / (EARTHRADIUS + 100e3))), 0),
                 Orientation = 1.0 / 2.0 * Math.PI,
                 Mass = 1000,
                 AngularMomentum = 1000,
@@ -174,22 +174,31 @@ namespace Orbit
             // Add Particles
             if (thrust > 0)
             {
-                // Start at the rocket
-                // Calc opposite direction
-                int NUMPARTICLES = Rocket.BoostersEnabled ? 5 : 1;
-                const double VELOCITYCOMBUSTIONPARTICLE = 100000;
-                for (int i = 0; i < NUMPARTICLES; i++)
-                {
-                    // Randomize
-                    double rngModifier = 0.95 + Rng.NextDouble() / 10.0;
-                    var velParticle = Rocket.Body.Velocity + Toolbox.Rotate(new Vector(VELOCITYCOMBUSTIONPARTICLE * rngModifier, 0), Rocket.Body.Orientation + Math.PI * rngModifier);
+                AddCombustionParticles(thrust);
+            }
+        }
 
-                    Objects.Add(new Objects.Particles.CombustionParticle(new Orbit.Objects.Particles.Particle()
-                    {
-                        Creationtime = GlobalTime,
-                        MaxLifetime = Rng.NextDouble() * 3
-                    }, 1, Rocket.Body.Location, velParticle));
-                }
+        private void AddCombustionParticles(double thrust)
+        {
+            // Start at the rocket
+            // Calc opposite direction
+            int NUMPARTICLES = Rocket.BoostersEnabled ? 5 : 1;
+            for (int i = 0; i < NUMPARTICLES; i++)
+            {
+                // Thrust is the probability with that a particle is spawned
+                if (Rng.NextDouble() >= thrust)
+                    continue;
+
+                // Randomize physical properties
+                double rngModifier = 0.95 + Rng.NextDouble() / 10.0;
+                const double VELOCITYCOMBUSTIONPARTICLE = 100000;
+                var velParticle = Rocket.Body.Velocity + Toolbox.Rotate(new Vector(VELOCITYCOMBUSTIONPARTICLE * rngModifier, 0), Rocket.Body.Orientation + Math.PI * rngModifier);
+
+                Objects.Add(new Objects.Particles.CombustionParticle(new Orbit.Objects.Particles.Particle()
+                {
+                    Creationtime = GlobalTime,
+                    MaxLifetime = Rng.NextDouble() * 3
+                }, 1, Rocket.Body.Location, velParticle));
             }
         }
 
@@ -253,9 +262,10 @@ namespace Orbit
 
             // Integrating acc will yield dV
             Vector dV = acc * timestep;
+            // (use middle point approx)
             body.Velocity += dV;
 
-            // Integrating dV will yield dS
+            // Integrating dV will yield dS 
             Vector dS = body.Velocity * timestep;
             body.Location += dS;
 
@@ -283,7 +293,7 @@ namespace Orbit
             Vector vec = Earth.Body.Location - body.Location;
 
             // Then, calc magnitude
-            double force = GRAVITYCONST * (body.Mass * Earth.Body.Mass) / Math.Pow(vec.Length, 2);
+            double force = GRAVITYCONST * ((body.Mass * Earth.Body.Mass) / Math.Pow(vec.Length, 2));
 
             // Then apply
             body.Force += force * new Vector(Math.Cos(vec.Angle), Math.Sin(vec.Angle));
@@ -346,7 +356,7 @@ namespace Orbit
                     CalcPhysics(timestep * 8, clone);
 
                     // Check bounds
-                    if (clone.Location.Length > (EARTHRADIUS * 10))
+                    if (clone.Location.Length > (EARTHRADIUS * 100))
                         break;
 
                     // Store location

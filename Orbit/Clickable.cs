@@ -38,5 +38,14 @@ namespace Orbit
                 ToggleState = false;
             }
         }
+
+        public void Click()
+        {
+            if (ToggleState == false)
+            {
+                OnClick();
+                ToggleState = true;
+            }
+        }
     }
 }

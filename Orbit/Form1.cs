@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Data;
+using System.Diagnostics;
 using System.Drawing;
 using System.Linq;
 using System.Text;
@@ -32,6 +33,7 @@ namespace Orbit
         double TurnCommand { get; set; }
         double ThrustCommand { get; set; }
         int TimeRate { get; set; } = 1;
+        public bool AutoFly { get; private set; } = false;
 
         readonly List<Clickable> Clickables = new List<Clickable>();
 
@@ -40,6 +42,7 @@ namespace Orbit
         {
             Clamp = 1.0
         };
+        readonly Controllers.PidController DockController = new Controllers.PidController(1, 0.25, 0.1);
 
         public bool Retrograde = false;
 
@@ -99,10 +102,36 @@ namespace Orbit
 
             Clickables.Add(progradeButton);
             Clickables.Add(retrogradeButton);
+            Clickables.Add(new Clickable()
+            {
+                Label = "AUTO",
+                Rectangle = new Rectangle(0, 80, 40, 40),
+                OnClick = () =>
+                {
+                    AutoFly = true;
+                },
+                OnUnClick = () =>
+                {
+                    AutoFly = false;
+                    stage = 0;
+                },
+                Toggle = true
+            });
         }
 
         private void PhysicsFrame()
         {
+            // Calc apsis
+            Apsis = OrbitalMechanics.CalcApsis(MyWorld.Rocket.Body.Mass, World.EARTHMASS,
+                MyWorld.Rocket.Body.Velocity,
+                MyWorld.Rocket.Body.Location,
+                World.GRAVITYCONST);
+
+            if (AutoFly)
+            {
+                Autopilot();
+            }
+
             // Calc controllers (will override user inputs)
             if (FlightController.IsActive)
             {
@@ -134,6 +163,143 @@ namespace Orbit
             }
 
             MyWorld.PhysicsNext(TurnCommand, ThrustCommand, TIMESTEP);
+
+            // Make apsis user friedly
+            Apsis.Near -= World.EARTHRADIUS;
+            Apsis.Far -= World.EARTHRADIUS;
+        }
+
+
+        int stage = 0;
+        string stageDescription = "Init";
+        private void Autopilot()
+        {
+            // state
+            switch (stage)
+            {
+                case 0:
+                    // Go prograde
+                    Clickables[0].Click();
+                    stage = 1;
+                    stageDescription = "Wait for prograde...";
+                    TimeRate = 1;
+                    break;
+
+                case 1:
+                    // Check prograde
+                    if ((Math.Abs(Limit180Deg(MyWorld.Rocket.Body.Orientation - MyWorld.Rocket.Body.Velocity.Angle)) <= 0.2)
+                        &&
+                        (Math.Abs(MyWorld.Rocket.Body.RotationSpeed) <= 0.1))
+                    {
+                        stage = 2;
+                        stageDescription = "Raising apoapsis";
+                        TimeRate = 1;
+                    }
+                    break;
+
+                case 2:
+                    // Fire until apoapsis is good
+                    ThrustCommand = 0.75;
+                    if (Apsis.Far >= (MyWorld.Station.Body.Location.Length * 0.9))
+                    {
+                        stage = 3;
+                        stageDescription = "Wait for apoapsis...";
+                        TimeRate = 1;
+                    }
+                    break;
+
+                case 3:
+                    ThrustCommand = 0;
+                    // Check height
+                    if (MyWorld.Rocket.Body.Location.Length >= (Apsis.Far * 0.999))
+                    {
+                        stage = 4;
+                        stageDescription = "Circularization burn";
+                        TimeRate = 1;
+                    }
+                    break;
+
+                case 4:
+                    ThrustCommand = 1;
+                    // Check near -> far
+                    if (Apsis.Near >= (Apsis.Far * 0.95))
+                    {
+                        stage = 5;
+                        stageDescription = "Wait for phase...";
+                        TimeRate = 1;
+                    }
+                    break;
+
+                case 5:
+                    ThrustCommand = 0;
+                    // Check phase
+                    if (Math.Abs(MyWorld.Station.Body.Location.Angle - MyWorld.Rocket.Body.Location.Angle) <= 0.187417)
+                    {
+                        stage = 6;
+                        stageDescription = "Raising apoapsis";
+                        TimeRate = 1;
+                    }
+                    break;
+
+                case 6:
+                    // Fire until apoapsis is good
+                    ThrustCommand = 0.75;
+                    if (Apsis.Far >= (MyWorld.Station.Body.Location.Length))
+                    {
+                        stage = 7;
+                        stageDescription = "Wait for apoapsis...";
+                        TimeRate = 1;
+                    }
+                    break;
+
+                case 7:
+                    // Check height
+                    ThrustCommand = 0;
+                    if (MyWorld.Rocket.Body.Location.Length >= MyWorld.Station.Body.Location.Length)
+                    {
+                        stage = 8;
+                        stageDescription = "Circularization burn";
+                        TimeRate = 1;
+                    }
+                    break;
+
+                case 8:
+                    ThrustCommand = 0.5;
+                    // Check circle
+                    if ((Math.Abs(Apsis.Far - Apsis.Near) <= 30000) || (Math.Max(Apsis.Near, Apsis.Far) >= MyWorld.Station.Body.Location.Length))
+                    {
+                        stage = 9;
+                        stageDescription = "Docking mode";
+                        TimeRate = 1;
+                    }
+                    break;
+
+                case 9:
+                    ThrustCommand = 0;
+                    Clickables[0].UnClick();
+
+                    stage = 10;
+                    TimeRate = 1;
+                    break;
+
+                case 10:
+                    // Calc guidance error where abs(err)<=180°
+                    double guidanceError = Limit180Deg((MyWorld.Station.Body.Location - MyWorld.Rocket.Body.Location).Angle - MyWorld.Rocket.Body.Orientation);
+
+                    //// Give Thrust based on guidance error
+                    //ThrustCommand = 0.25 - guidanceError;
+                    //ThrustCommand = Math.Max(0, ThrustCommand);
+
+                    // Calc turn signal based on error
+                    double desiredRotSpeed = guidanceError / 3.0;
+
+                    // Never exceed abs > 1
+                    TurnCommand = DockController.Next(TIMESTEP, desiredRotSpeed, MyWorld.Rocket.Body.RotationSpeed);
+                    break;
+
+                default:
+                    break;
+            }
         }
 
         private double Limit180Deg(double v)
@@ -178,14 +344,6 @@ namespace Orbit
 
                 // Recalc Trajectories (ALWAYS CONST TIMESTEP!)
                 MyWorld.RecalcTrajectories(TIMESTEP);
-
-                // Calc apsis
-                Apsis = OrbitalMechanics.CalcApsis(MyWorld.Rocket.Body.Mass, World.EARTHMASS,
-                    MyWorld.Rocket.Body.Velocity,
-                    MyWorld.Rocket.Body.Location,
-                    World.GRAVITYCONST);
-                Apsis.Near -= World.EARTHRADIUS;
-                Apsis.Far -= World.EARTHRADIUS;
             }
 
             // Check complex key events
@@ -231,6 +389,11 @@ namespace Orbit
             g.DrawString(
                 $"Thrust={ThrustCommand:F2}, Turn={TurnCommand:F2}",
                 SystemFonts.DefaultFont, Brushes.White, 0, pictureBox1.Height - 80);
+
+            g.DrawString($"stage={stage} ({stageDescription})",
+                SystemFonts.DefaultFont, Brushes.White, 0, pictureBox1.Height - 100);
+
+
 
             // Draw buttons
             foreach (Clickable button in Clickables)
